@@ -1,0 +1,226 @@
+import time
+import math
+from statistics import mean
+from decimal import Decimal, getcontext, ROUND_HALF_UP
+import matplotlib.pyplot as plt
+
+# Settings
+RUNS = 3
+PRINT_DECIMALS = 8
+
+# Input sets (from report)
+SMALL_INPUTS = [5, 7, 10, 12, 15, 17, 20, 22, 25, 27, 30, 32, 35, 37, 40, 42, 45]
+BIG_INPUTS   = [501, 631, 794, 1000, 1259, 1585, 1995, 2512, 3162, 3981, 5012, 6310, 7943, 10000, 12589, 15849]
+
+# Algorithms (6 total)
+def fib_recursive(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib_recursive(n - 1) + fib_recursive(n - 2)
+
+def fib_dp_array(n: int) -> int:
+    if n <= 1:
+        return n
+    A = [0] * (n + 1)
+    A[0], A[1] = 0, 1
+    for i in range(2, n + 1):
+        A[i] = A[i - 1] + A[i - 2]
+    return A[n]
+
+def mat_mul_2x2(x, y):
+    return [
+        [x[0][0] * y[0][0] + x[0][1] * y[1][0],
+         x[0][0] * y[0][1] + x[0][1] * y[1][1]],
+        [x[1][0] * y[0][0] + x[1][1] * y[1][0],
+         x[1][0] * y[0][1] + x[1][1] * y[1][1]],
+    ]
+
+def fib_matrix_naive(n: int) -> int:
+    if n <= 1:
+        return n
+    base = [[1, 1], [1, 0]]
+    result = [[1, 0], [0, 1]]
+    for _ in range(n - 1):
+        result = mat_mul_2x2(result, base)
+    return result[0][0]
+
+def fib_binet_float(n: int) -> int:
+    if n <= 1:
+        return n
+    phi = (1 + math.sqrt(5)) / 2
+    return int(round((phi ** n) / math.sqrt(5)))
+
+def fib_fast_doubling(n: int) -> int:
+    def helper(k: int):
+        if k == 0:
+            return (0, 1)
+        a, b = helper(k // 2)
+        c = a * (2 * b - a)
+        d = a * a + b * b
+        if k % 2 == 0:
+            return (c, d)
+        else:
+            return (d, c + d)
+    return helper(n)[0]
+
+def required_precision(n: int) -> int:
+    # Using the same simple rule you've been using
+    return max(50, n + 20)
+
+def fib_binet_decimal(n: int) -> int:
+    if n <= 1:
+        return n
+    getcontext().prec = required_precision(n)
+    sqrt5 = Decimal(5).sqrt()
+    phi = (Decimal(1) + sqrt5) / Decimal(2)
+    value = (phi ** n) / sqrt5
+    rounded = (value + Decimal("0.5")).to_integral_value(rounding=ROUND_HALF_UP)
+    return int(rounded)
+
+# Timing (average of 3 runs) with progress prints
+def time_once(fn, n: int) -> float:
+    t0 = time.perf_counter()
+    fn(n)
+    t1 = time.perf_counter()
+    return t1 - t0
+
+def time_avg_with_progress(set_name: str, alg_name: str, fn, n: int) -> float:
+    vals = []
+    for r in range(1, RUNS + 1):
+        print(f"{set_name} | {alg_name} | run {r}/{RUNS} | computing for n = {n} ...")
+        vals.append(time_once(fn, n))
+    return mean(vals)
+
+# Table printing
+def fmt(x):
+    if x is None:
+        return "N/A"
+    return f"{x:.{PRINT_DECIMALS}f}"
+
+def print_fancy_table(title: str, inputs, alg_names, data_matrix):
+    headers = ["Algorithm"] + [str(n) for n in inputs]
+    rows = []
+    for name, row in zip(alg_names, data_matrix):
+        rows.append([name] + [fmt(v) for v in row])
+
+    col_widths = [max(len(r[i]) for r in ([headers] + rows)) for i in range(len(headers))]
+
+    def line(left, mid, right):
+        return left + mid.join("─" * (w + 2) for w in col_widths) + right
+
+    print("\n" + title)
+    print(line("┌", "┬", "┐"))
+    print("│ " + " │ ".join(headers[i].ljust(col_widths[i]) for i in range(len(headers))) + " │")
+    print(line("├", "┼", "┤"))
+    for r in rows:
+        print(
+            "│ " + " │ ".join(
+                r[i].ljust(col_widths[i]) if i == 0 else r[i].rjust(col_widths[i])
+                for i in range(len(r))
+            ) + " │"
+        )
+    print(line("└", "┴", "┘"))
+
+# Graphing (blocking, close window to continue)
+def plot_graph(inputs, alg_names, data_matrix, title, filename, log_y=False):
+    plt.figure()
+    for name, row in zip(alg_names, data_matrix):
+        xs, ys = [], []
+        for n, t in zip(inputs, row):
+            if t is None:
+                continue
+            xs.append(n)
+            ys.append(t)
+        if xs:
+            plt.plot(xs, ys, marker="o", label=name)
+
+    plt.title(title)
+    plt.xlabel("n-th Fibonacci Term")
+    plt.ylabel("Time (s)")
+    plt.grid(True)
+
+    if log_y:
+        plt.yscale("log")  # helps when recursion is included
+
+    plt.legend()
+    plt.savefig(filename, dpi=200, bbox_inches="tight")
+    plt.show()
+    print(f"\nSaved graph as: {filename}")
+
+# Benchmark sets
+def benchmark_set(set_name: str, inputs, algorithms):
+    alg_names = []
+    data = []
+
+    for alg_name, fn in algorithms:
+        row = []
+        for n in inputs:
+            row.append(time_avg_with_progress(set_name, alg_name, fn, n))
+        alg_names.append(alg_name)
+        data.append(row)
+
+    return alg_names, data
+
+# Main: small then big, and big runs Decimal-Binet for all big values
+def main():
+    # Small: all 6 algorithms
+    small_algorithms = [
+        ("Recursive", fib_recursive),
+        ("DP_Array", fib_dp_array),
+        ("Matrix_Naive", fib_matrix_naive),
+        ("Binet_Float", fib_binet_float),
+        ("Fast_Doubling", fib_fast_doubling),
+        ("Binet_Decimal", fib_binet_decimal),
+    ]
+
+    alg_names_small, data_small = benchmark_set("SMALL", SMALL_INPUTS, small_algorithms)
+
+    print_fancy_table(
+        title="All Algorithms — SMALL input set (AVG of 3 runs, seconds)",
+        inputs=SMALL_INPUTS,
+        alg_names=alg_names_small,
+        data_matrix=data_small
+    )
+
+    plot_graph(
+        inputs=SMALL_INPUTS,
+        alg_names=alg_names_small,
+        data_matrix=data_small,
+        title="All Algorithms Comparison (SMALL set, AVG of 3 runs)",
+        filename="all_algorithms_small.png",
+        log_y=True
+    )
+
+    # Big: DP + Fast Doubling on full big list
+    big_algorithms = [
+        ("DP_Array", fib_dp_array),
+        ("Fast_Doubling", fib_fast_doubling),
+    ]
+    alg_names_big, data_big = benchmark_set("BIG", BIG_INPUTS, big_algorithms)
+
+    # Big: Decimal-Binet for all big values
+    dec_row = []
+    for n in BIG_INPUTS:
+        dec_row.append(time_avg_with_progress("BIG", "Binet_Decimal", fib_binet_decimal, n))
+
+    alg_names_big.append("Binet_Decimal")
+    data_big.append(dec_row)
+
+    print_fancy_table(
+        title="All Algorithms — BIG input set (AVG of 3 runs, seconds)",
+        inputs=BIG_INPUTS,
+        alg_names=alg_names_big,
+        data_matrix=data_big
+    )
+
+    plot_graph(
+        inputs=BIG_INPUTS,
+        alg_names=alg_names_big,
+        data_matrix=data_big,
+        title="All Algorithms Comparison (BIG set, AVG of 3 runs)",
+        filename="all_algorithms_big.png",
+        log_y=False
+    )
+
+if __name__ == "__main__":
+    main()
