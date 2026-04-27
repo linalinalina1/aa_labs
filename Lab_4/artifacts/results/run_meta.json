@@ -1,0 +1,38 @@
+{
+  "config": {
+    "seed": 12345,
+    "dijkstra_sizes": [
+      20,
+      30,
+      40,
+      50,
+      80,
+      120,
+      200,
+      300,
+      400,
+      600,
+      800
+    ],
+    "floyd_sizes": [
+      20,
+      30,
+      40,
+      50,
+      80,
+      120,
+      200,
+      300,
+      400,
+      600,
+      800
+    ],
+    "sparse_extra_edges_per_node": 4,
+    "dense_edge_probability": 0.6,
+    "weight_min": 1,
+    "weight_max": 10,
+    "repeats": 3,
+    "warmup_runs": 1,
+    "benchmark_sources": 2
+  }
+}
