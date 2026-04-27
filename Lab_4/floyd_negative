@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import numpy as np
+
+from algorithms import floyd_warshall_python, floyd_warshall_numpy
+
+INF = float("inf")
+
+
+def print_matrix(name: str, mat: np.ndarray) -> None:
+    print(f"\n{name}:")
+    for row in mat:
+        print(" ".join(f"{x:6.1f}" if not np.isinf(x) else "  inf" for x in row))
+
+
+def detect_negative_cycle(dist: np.ndarray) -> bool:
+    """Floyd–Warshall negative cycle detection."""
+    return bool(np.any(np.diag(dist) < 0))
+
+
+# -----------------------------
+# Bellman–Ford (reference)
+# -----------------------------
+def bellman_ford(n: int, edges: list[tuple[int, int, float]], source: int):
+    dist = [INF] * n
+    dist[source] = 0.0
+
+    for _ in range(n - 1):
+        for u, v, w in edges:
+            if dist[u] != INF and dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w
+
+    # detect negative cycle
+    for u, v, w in edges:
+        if dist[u] != INF and dist[u] + w < dist[v]:
+            return dist, True
+
+    return dist, False
+
+
+def all_pairs_bellman_ford(n: int, edges: list[tuple[int, int, float]]):
+    dist_matrix = np.full((n, n), INF)
+    has_cycle = False
+
+    for s in range(n):
+        dist, neg = bellman_ford(n, edges, s)
+        dist_matrix[s] = dist
+        if neg:
+            has_cycle = True
+
+    return dist_matrix, has_cycle
+
+
+# -----------------------------
+# Build graph matrix
+# -----------------------------
+def build_matrix(n: int, edges: list[tuple[int, int, float]]) -> np.ndarray:
+    dist = np.full((n, n), INF)
+    np.fill_diagonal(dist, 0.0)
+
+    for u, v, w in edges:
+        dist[u, v] = min(dist[u, v], w)
+
+    return dist
+
+
+# -----------------------------
+# Test cases
+# -----------------------------
+def run_case(name: str, n: int, edges: list[tuple[int, int, float]]):
+    print("\n" + "=" * 60)
+    print(name)
+    print("=" * 60)
+
+    matrix = build_matrix(n, edges)
+
+    fw_py = floyd_warshall_python(matrix)
+    fw_np = floyd_warshall_numpy(matrix)
+
+    bf, bf_cycle = all_pairs_bellman_ford(n, edges)
+
+    py_cycle = detect_negative_cycle(fw_py)
+    np_cycle = detect_negative_cycle(fw_np)
+
+    print(f"\nFloyd (Python) negative cycle: {py_cycle}")
+    print(f"Floyd (NumPy)  negative cycle: {np_cycle}")
+    print(f"Bellman–Ford   negative cycle: {bf_cycle}")
+
+    if not py_cycle:
+        if np.allclose(fw_py, bf, equal_nan=True):
+            print("✔ Correctness check PASSED (matches Bellman–Ford)")
+        else:
+            print("✘ Correctness check FAILED")
+
+    else:
+        print("⚠ Skipping correctness check due to negative cycle")
+
+    print_matrix("Input", matrix)
+    print_matrix("Floyd result", fw_py)
+
+    if not py_cycle:
+        print_matrix("Bellman–Ford", bf)
+
+
+def main():
+    # Case 1: negative edges, no cycle
+    run_case(
+        "CASE 1: Negative edges, no cycle",
+        5,
+        [
+            (0, 1, 4),
+            (0, 2, 2),
+            (1, 2, -1),
+            (1, 3, 2),
+            (2, 3, 3),
+            (3, 4, 2),
+        ],
+    )
+
+    # Case 2: negative cycle
+    run_case(
+        "CASE 2: Negative cycle",
+        4,
+        [
+            (0, 1, 1),
+            (1, 2, -2),
+            (2, 1, -2),
+            (2, 3, 2),
+        ],
+    )
+
+
+if __name__ == "__main__":
+    main()
