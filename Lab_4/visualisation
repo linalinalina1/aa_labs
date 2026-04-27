@@ -1,0 +1,696 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import heapq
+import math
+import random
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.animation import FuncAnimation
+from matplotlib.axes import Axes
+from matplotlib.patches import Patch
+
+from algorithms import (
+    dijkstra_array,
+    dijkstra_heap,
+    floyd_warshall_numpy_checked,
+    floyd_warshall_python_checked,
+)
+from graphs import AdjList
+
+
+INF = float("inf")
+
+
+@dataclass(frozen=True)
+class DijkstraStepState:
+    processed: frozenset[int]
+    frontier: tuple[int, ...]
+    current: int | None
+    dist: tuple[float, ...]
+    title: str
+
+
+@dataclass(frozen=True)
+class FloydStepState:
+    k: int
+    matrix: np.ndarray
+    title: str
+
+
+def add_undirected_edge(adj: AdjList, u: int, v: int, w: float) -> None:
+    adj[u].append((v, w))
+    adj[v].append((u, w))
+
+
+def add_directed_edge(adj: AdjList, u: int, v: int, w: float) -> None:
+    adj[u].append((v, w))
+
+
+def make_weighted_graph_with_edge_count(
+    n: int,
+    m: int,
+    *,
+    weight_min: int = 1,
+    weight_max: int = 10,
+    seed: int = 12345,
+) -> tuple[AdjList, bool]:
+    """Generate a connected weighted undirected graph with exactly m edges."""
+    if n < 2:
+        raise ValueError("Number of vertices must be at least 2.")
+
+    max_edges = n * (n - 1) // 2
+    min_edges = n - 1
+
+    if m < min_edges:
+        raise ValueError(
+            f"Too few edges. For a connected graph with n={n}, "
+            f"the number of edges must be at least {min_edges}."
+        )
+
+    if m > max_edges:
+        raise ValueError(
+            f"Too many edges. For n={n}, the maximum number of undirected edges is {max_edges}."
+        )
+
+    rng = random.Random(seed)
+    adj: AdjList = [[] for _ in range(n)]
+    existing_edges: set[tuple[int, int]] = set()
+
+    for v in range(1, n):
+        u = rng.randrange(0, v)
+        w = float(rng.randint(weight_min, weight_max))
+        add_undirected_edge(adj, u, v, w)
+        existing_edges.add((min(u, v), max(u, v)))
+
+    current_edges = n - 1
+
+    while current_edges < m:
+        u = rng.randrange(0, n)
+        v = rng.randrange(0, n)
+        if u == v:
+            continue
+
+        edge = (min(u, v), max(u, v))
+        if edge in existing_edges:
+            continue
+
+        w = float(rng.randint(weight_min, weight_max))
+        add_undirected_edge(adj, u, v, w)
+        existing_edges.add(edge)
+        current_edges += 1
+
+    return adj, False
+
+
+def make_negative_demo_graph() -> tuple[AdjList, bool]:
+    """Directed demo graph with a negative edge and no negative cycle."""
+    n = 4
+    adj: AdjList = [[] for _ in range(n)]
+
+    add_directed_edge(adj, 0, 1, 1)
+    add_directed_edge(adj, 0, 2, 2)
+    add_directed_edge(adj, 2, 1, -5)
+    add_directed_edge(adj, 1, 3, 2)
+    add_directed_edge(adj, 2, 3, 10)
+
+    return adj, True
+
+
+def adj_to_matrix(adj: AdjList) -> np.ndarray:
+    n = len(adj)
+    dist = np.full((n, n), np.inf, dtype=np.float64)
+    np.fill_diagonal(dist, 0.0)
+
+    for u in range(n):
+        for v, w in adj[u]:
+            if w < dist[u, v]:
+                dist[u, v] = float(w)
+
+    return dist
+
+
+def count_edges(adj: AdjList, directed: bool) -> int:
+    total = sum(len(neigh) for neigh in adj)
+    return total if directed else total // 2
+
+
+def circular_positions(n: int, radius: float = 3.0) -> dict[int, tuple[float, float]]:
+    positions: dict[int, tuple[float, float]] = {}
+    for node in range(n):
+        angle = 2.0 * math.pi * (node / n)
+        positions[node] = (radius * math.cos(angle), radius * math.sin(angle))
+    return positions
+
+
+def dijkstra_array_step_states(adj: AdjList, source: int) -> list[DijkstraStepState]:
+    n = len(adj)
+    dist = [INF] * n
+    used = [False] * n
+    dist[source] = 0.0
+
+    steps: list[DijkstraStepState] = [
+        DijkstraStepState(
+            processed=frozenset(),
+            frontier=(source,),
+            current=None,
+            dist=tuple(dist),
+            title="Dijkstra (array) - Initial state",
+        )
+    ]
+
+    for _ in range(n):
+        u = -1
+        best = INF
+        frontier_nodes: list[int] = []
+
+        for i in range(n):
+            if not used[i]:
+                frontier_nodes.append(i)
+                if dist[i] < best:
+                    best = dist[i]
+                    u = i
+
+        if u == -1:
+            break
+
+        steps.append(
+            DijkstraStepState(
+                processed=frozenset(i for i in range(n) if used[i]),
+                frontier=tuple(frontier_nodes),
+                current=u,
+                dist=tuple(dist),
+                title=f"Dijkstra (array) - Select node {u}",
+            )
+        )
+
+        used[u] = True
+        du = dist[u]
+
+        for v, w in adj[u]:
+            nd = du + w
+            if nd < dist[v]:
+                dist[v] = nd
+
+        steps.append(
+            DijkstraStepState(
+                processed=frozenset(i for i in range(n) if used[i]),
+                frontier=tuple(i for i in range(n) if not used[i]),
+                current=None,
+                dist=tuple(dist),
+                title=f"Dijkstra (array) - After relaxing edges of {u}",
+            )
+        )
+
+    return steps
+
+
+def dijkstra_heap_step_states(adj: AdjList, source: int) -> list[DijkstraStepState]:
+    n = len(adj)
+    dist = [INF] * n
+    dist[source] = 0.0
+
+    pq: list[tuple[float, int]] = [(0.0, source)]
+    processed: set[int] = set()
+
+    steps: list[DijkstraStepState] = [
+        DijkstraStepState(
+            processed=frozenset(),
+            frontier=(source,),
+            current=None,
+            dist=tuple(dist),
+            title="Dijkstra (heap) - Initial state",
+        )
+    ]
+
+    while pq:
+        d, u = heapq.heappop(pq)
+
+        if d != dist[u]:
+            continue
+
+        steps.append(
+            DijkstraStepState(
+                processed=frozenset(processed),
+                frontier=tuple(node for _, node in pq),
+                current=u,
+                dist=tuple(dist),
+                title=f"Dijkstra (heap) - Extract node {u}",
+            )
+        )
+
+        processed.add(u)
+
+        for v, w in adj[u]:
+            nd = d + w
+            if nd < dist[v]:
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+
+        steps.append(
+            DijkstraStepState(
+                processed=frozenset(processed),
+                frontier=tuple(node for _, node in pq),
+                current=None,
+                dist=tuple(dist),
+                title=f"Dijkstra (heap) - After relaxing edges of {u}",
+            )
+        )
+
+    return steps
+
+
+def floyd_warshall_python_step_states(dist0: np.ndarray) -> list[FloydStepState]:
+    dist = dist0.astype(np.float64, copy=True)
+    n = dist.shape[0]
+
+    steps: list[FloydStepState] = [
+        FloydStepState(
+            k=-1,
+            matrix=dist.copy(),
+            title="Floyd–Warshall (python) - Initial matrix",
+        )
+    ]
+
+    for k in range(n):
+        for i in range(n):
+            dik = dist[i, k]
+            if np.isinf(dik):
+                continue
+            for j in range(n):
+                nd = dik + dist[k, j]
+                if nd < dist[i, j]:
+                    dist[i, j] = nd
+
+        steps.append(
+            FloydStepState(
+                k=k,
+                matrix=dist.copy(),
+                title=f"Floyd–Warshall (python) - After k = {k}",
+            )
+        )
+
+    return steps
+
+
+def floyd_warshall_numpy_step_states(dist0: np.ndarray) -> list[FloydStepState]:
+    dist = dist0.astype(np.float64, copy=True)
+    n = dist.shape[0]
+
+    steps: list[FloydStepState] = [
+        FloydStepState(
+            k=-1,
+            matrix=dist.copy(),
+            title="Floyd–Warshall (NumPy) - Initial matrix",
+        )
+    ]
+
+    for k in range(n):
+        dist = np.minimum(dist, dist[:, [k]] + dist[[k], :])
+        steps.append(
+            FloydStepState(
+                k=k,
+                matrix=dist.copy(),
+                title=f"Floyd–Warshall (NumPy) - After k = {k}",
+            )
+        )
+
+    return steps
+
+
+def draw_weighted_graph_step(
+    ax: Axes,
+    adj: AdjList,
+    positions: dict[int, tuple[float, float]],
+    processed: frozenset[int],
+    frontier: tuple[int, ...],
+    current: int | None,
+    dist: tuple[float, ...],
+    title: str,
+    *,
+    directed: bool,
+) -> None:
+    ax.clear()
+
+    if directed:
+        for u in range(len(adj)):
+            x1, y1 = positions[u]
+            for v, w in adj[u]:
+                x2, y2 = positions[v]
+                ax.annotate(
+                    "",
+                    xy=(x2, y2),
+                    xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="->", color="black", lw=1.2, alpha=0.7),
+                    zorder=1,
+                )
+                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+                ax.text(mx, my, str(int(w)), fontsize=10, color="blue")
+    else:
+        drawn_edges: set[tuple[int, int]] = set()
+        for u in range(len(adj)):
+            x1, y1 = positions[u]
+            for v, w in adj[u]:
+                edge = (u, v) if u < v else (v, u)
+                if edge in drawn_edges:
+                    continue
+                x2, y2 = positions[v]
+                ax.plot([x1, x2], [y1, y2], linewidth=1.5, color="black", alpha=0.7)
+                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+                ax.text(mx, my, str(int(w)), fontsize=10, color="blue")
+                drawn_edges.add(edge)
+
+    frontier_set = set(frontier)
+    for node, (x, y) in positions.items():
+        if node == current:
+            color = "red"
+        elif node in processed:
+            color = "lightgreen"
+        elif node in frontier_set:
+            color = "khaki"
+        else:
+            color = "lightgray"
+
+        ax.scatter(x, y, s=1200, edgecolors="black", zorder=3, c="white")
+        ax.scatter(x, y, s=1000, c=color, edgecolors="black", zorder=4)
+
+        d = dist[node]
+        label = f"{node}\n∞" if np.isinf(d) else f"{node}\n{d:.0f}"
+        ax.text(x, y, label, ha="center", va="center", fontsize=11, zorder=5)
+
+    ax.set_title(title)
+    legend_handles = [
+        Patch(facecolor="lightgray", edgecolor="black", label="Unprocessed"),
+        Patch(facecolor="khaki", edgecolor="black", label="Frontier"),
+        Patch(facecolor="lightgreen", edgecolor="black", label="Processed"),
+        Patch(facecolor="red", edgecolor="black", label="Current"),
+    ]
+    ax.legend(handles=legend_handles, loc="lower left", framealpha=0.9)
+    ax.axis("off")
+
+
+def draw_matrix_step(ax: Axes, state: FloydStepState) -> None:
+    ax.clear()
+    mat = state.matrix
+    n = mat.shape[0]
+
+    display = np.empty((n, n), dtype=object)
+    for i in range(n):
+        for j in range(n):
+            if np.isinf(mat[i, j]):
+                display[i, j] = "∞"
+            else:
+                display[i, j] = f"{mat[i, j]:.0f}"
+
+    ax.axis("off")
+    table = ax.table(
+        cellText=display,
+        rowLabels=[str(i) for i in range(n)],
+        colLabels=[str(i) for i in range(n)],
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1.2, 1.6)
+
+    if state.k >= 0:
+        ax.set_title(f"{state.title}\nIntermediate vertex k = {state.k}")
+    else:
+        ax.set_title(state.title)
+
+
+def animate_single_dijkstra(adj: AdjList, steps: list[DijkstraStepState], *, directed: bool) -> None:
+    positions = circular_positions(len(adj))
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    def update(frame_idx: int):
+        state = steps[frame_idx]
+        draw_weighted_graph_step(
+            ax=ax,
+            adj=adj,
+            positions=positions,
+            processed=state.processed,
+            frontier=state.frontier,
+            current=state.current,
+            dist=state.dist,
+            title=state.title,
+            directed=directed,
+        )
+        return []
+
+    anim = FuncAnimation(fig, update, frames=len(steps), interval=1100, repeat=False)
+    setattr(fig, "_anim", anim)
+    plt.show()
+
+
+def animate_single_floyd(steps: list[FloydStepState]) -> None:
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    def update(frame_idx: int):
+        draw_matrix_step(ax, steps[frame_idx])
+        return []
+
+    anim = FuncAnimation(fig, update, frames=len(steps), interval=1400, repeat=False)
+    setattr(fig, "_anim", anim)
+    plt.show()
+
+
+def animate_compare_any(
+    left_kind: str,
+    right_kind: str,
+    left_steps: list[DijkstraStepState] | list[FloydStepState],
+    right_steps: list[DijkstraStepState] | list[FloydStepState],
+    *,
+    adj: AdjList,
+    directed: bool,
+    left_title: str,
+    right_title: str,
+) -> None:
+    positions = circular_positions(len(adj))
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(15, 6))
+    fig.suptitle(f"{left_title} vs {right_title}", fontsize=14)
+
+    max_frames = max(len(left_steps), len(right_steps))
+
+    def update(frame_idx: int):
+        left_state = left_steps[frame_idx] if frame_idx < len(left_steps) else left_steps[-1]
+        right_state = right_steps[frame_idx] if frame_idx < len(right_steps) else right_steps[-1]
+
+        if left_kind == "dijkstra":
+            assert isinstance(left_state, DijkstraStepState)
+            draw_weighted_graph_step(
+                ax=ax_left,
+                adj=adj,
+                positions=positions,
+                processed=left_state.processed,
+                frontier=left_state.frontier,
+                current=left_state.current,
+                dist=left_state.dist,
+                title=left_state.title,
+                directed=directed,
+            )
+        else:
+            assert isinstance(left_state, FloydStepState)
+            draw_matrix_step(ax_left, left_state)
+
+        if right_kind == "dijkstra":
+            assert isinstance(right_state, DijkstraStepState)
+            draw_weighted_graph_step(
+                ax=ax_right,
+                adj=adj,
+                positions=positions,
+                processed=right_state.processed,
+                frontier=right_state.frontier,
+                current=right_state.current,
+                dist=right_state.dist,
+                title=right_state.title,
+                directed=directed,
+            )
+        else:
+            assert isinstance(right_state, FloydStepState)
+            draw_matrix_step(ax_right, right_state)
+
+        return []
+
+    anim = FuncAnimation(fig, update, frames=max_frames, interval=1200, repeat=False)
+    setattr(fig, "_anim", anim)
+    plt.show()
+
+
+def ask_choice(prompt: str, choices: dict[str, str]) -> str:
+    while True:
+        print(prompt)
+        for key, label in choices.items():
+            print(f"  {key} - {label}")
+        value = input("> ").strip()
+        if value in choices:
+            return value
+        print("Invalid choice. Try again.\n")
+
+
+def ask_int(prompt: str, min_value: int, max_value: int | None = None) -> int:
+    while True:
+        raw = input(f"{prompt} ").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Please enter an integer.\n")
+            continue
+
+        if value < min_value:
+            print(f"Please enter a value >= {min_value}.\n")
+            continue
+
+        if max_value is not None and value > max_value:
+            print(f"Please enter a value <= {max_value}.\n")
+            continue
+
+        return value
+
+
+def print_graph(adj: AdjList, *, directed: bool) -> None:
+    print("\nWeighted graph adjacency list:")
+    for u in range(len(adj)):
+        print(f"{u}: {adj[u]}")
+    print(f"Graph type: {'directed' if directed else 'undirected'}")
+
+
+def print_final_negative_demo_comparison(adj: AdjList, matrix: np.ndarray, source: int) -> None:
+    print("\nNegative-edge demonstration from source 0:")
+    d_arr = dijkstra_array(adj, source)
+    d_heap = dijkstra_heap(adj, source)
+    fw_py, neg_py = floyd_warshall_python_checked(matrix)
+    fw_np, neg_np = floyd_warshall_numpy_checked(matrix)
+
+    print(f"Dijkstra (array) distances: {d_arr}")
+    print(f"Dijkstra (heap)  distances: {d_heap}")
+    print(f"Floyd (python) source-row: {fw_py[source].tolist()}")
+    print(f"Floyd (numpy)  source-row: {fw_np[source].tolist()}")
+    print(f"Negative cycle detected (python): {neg_py}")
+    print(f"Negative cycle detected (numpy):  {neg_np}")
+    print("In negative-edge mode, Floyd remains correct (if no negative cycle exists),")
+    print("while Dijkstra may still run but produce incorrect shortest-path results.")
+
+
+def get_algorithm_choice() -> tuple[str, str]:
+    choices = {
+        "1": "Dijkstra (array)",
+        "2": "Dijkstra (heap)",
+        "3": "Floyd–Warshall (python)",
+        "4": "Floyd–Warshall (numpy)",
+    }
+
+    value = ask_choice("Select algorithm:", choices)
+
+    if value == "1":
+        return "dijkstra_array", "Dijkstra (array)"
+    if value == "2":
+        return "dijkstra_heap", "Dijkstra (heap)"
+    if value == "3":
+        return "floyd_python", "Floyd–Warshall (python)"
+    return "floyd_numpy", "Floyd–Warshall (numpy)"
+
+
+def build_steps(
+    algorithm_key: str,
+    adj: AdjList,
+    matrix: np.ndarray,
+    source: int,
+) -> tuple[str, list[DijkstraStepState] | list[FloydStepState]]:
+    if algorithm_key == "dijkstra_array":
+        return "dijkstra", dijkstra_array_step_states(adj, source)
+    if algorithm_key == "dijkstra_heap":
+        return "dijkstra", dijkstra_heap_step_states(adj, source)
+    if algorithm_key == "floyd_python":
+        return "floyd", floyd_warshall_python_step_states(matrix)
+    if algorithm_key == "floyd_numpy":
+        return "floyd", floyd_warshall_numpy_step_states(matrix)
+    raise ValueError(f"Unknown algorithm key: {algorithm_key}")
+
+
+def main() -> None:
+    mode = ask_choice(
+        "Select mode:",
+        {
+            "1": "Visualize one algorithm",
+            "2": "Compare any 2 algorithms",
+        },
+    )
+
+    edge_mode = ask_choice(
+        "Select edge mode:",
+        {
+            "1": "Positive edges",
+            "2": "Negative-edge demo",
+        },
+    )
+
+    source = 0
+
+    if edge_mode == "1":
+        n = ask_int("Enter number of vertices:", min_value=2, max_value=25)
+        max_edges = n * (n - 1) // 2
+        min_edges = n - 1
+        print(f"For a connected undirected graph with n={n}, edges must satisfy:")
+        print(f"  {min_edges} <= m <= {max_edges}\n")
+
+        m = ask_int("Enter number of edges:", min_value=min_edges, max_value=max_edges)
+        seed = ask_int("Enter random seed (for reproducibility, e.g. 12345):", min_value=0)
+
+        adj, directed = make_weighted_graph_with_edge_count(n, m, seed=seed)
+        matrix = adj_to_matrix(adj)
+
+    else:
+        print("\nNegative-edge mode uses a fixed directed demo graph.")
+        print("This is intentional, because in undirected graphs a negative edge")
+        print("immediately creates a negative cycle.")
+        adj, directed = make_negative_demo_graph()
+        matrix = adj_to_matrix(adj)
+
+    print_graph(adj, directed=directed)
+    print(f"\nActual edge count: {count_edges(adj, directed)}")
+    print(f"Source vertex for Dijkstra: {source}")
+    print("\nClose the animation window to exit.")
+
+    if edge_mode == "2":
+        print_final_negative_demo_comparison(adj, matrix, source)
+
+    if mode == "1":
+        alg_key, alg_label = get_algorithm_choice()
+        kind, steps = build_steps(alg_key, adj, matrix, source)
+
+        if kind == "dijkstra":
+            animate_single_dijkstra(adj, steps, directed=directed)  # type: ignore[arg-type]
+        else:
+            animate_single_floyd(steps)  # type: ignore[arg-type]
+
+    else:
+        print("Select first algorithm:")
+        left_key, left_label = get_algorithm_choice()
+
+        while True:
+            print("\nSelect second algorithm:")
+            right_key, right_label = get_algorithm_choice()
+            if right_key != left_key:
+                break
+            print("Please choose two different algorithms.\n")
+
+        left_kind, left_steps = build_steps(left_key, adj, matrix, source)
+        right_kind, right_steps = build_steps(right_key, adj, matrix, source)
+
+        animate_compare_any(
+            left_kind,
+            right_kind,
+            left_steps,
+            right_steps,
+            adj=adj,
+            directed=directed,
+            left_title=left_label,
+            right_title=right_label,
+        )
+
+
+if __name__ == "__main__":
+    main()
